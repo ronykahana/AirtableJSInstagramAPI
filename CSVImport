@@ -1,0 +1,420 @@
+const config = input.config({
+    title: 'Import Influencers from a CSV',
+    description: 'Before you click Run, go to Apify and run the TikTok Scraper > Export > All Fields, CSV.',
+    items: [
+        input.config.table('usersTable', {
+            label: ' - User Names table -',
+            description: 'The table in which you track the influencers handles and data'
+        }),
+        input.config.field('nameField', {
+            label: 'Name field',
+            parentTable: 'usersTable',
+        }),
+        input.config.field('userNameField', {
+            label: 'User Name field',
+            parentTable: 'usersTable',
+        }),
+        input.config.field('ttHandleField', {
+            label: 'TikTok handle field',
+            parentTable: 'usersTable',
+        }),
+        input.config.field('igHandleField', {
+            label: 'Instagram handle field',
+            parentTable: 'usersTable',
+        }),
+        input.config.field('ttFollowersField', {
+            label: 'TikTok followers field',
+            parentTable: 'usersTable',
+        }),
+        input.config.field('bioField', {
+            label: 'Biography field',
+            parentTable: 'usersTable',
+        }),
+        input.config.field('ttIdField', {
+            label: 'TikTok ID field',
+            parentTable: 'usersTable',
+        }),
+        input.config.field('emailField', {
+            label: 'Email field',
+            parentTable: 'usersTable',
+        }),
+        input.config.field('webField', {
+            label: 'Website field',
+            parentTable: 'usersTable',
+        }),
+        
+            ]
+        });
+
+
+// Once the settings have been populated in the "Run script" pane, the returned config object
+// will contain the actual models for each item.
+const usersTable = config.usersTable.name;
+const nameField = config.nameField.name;
+const ttHandleField = config.ttHandleField.name;
+const igHandleField = config.igHandleField.name;
+const ttFollowersField = config.ttFollowersField.name;
+const bioField = config.bioField.name;
+const ttIdField = config.ttIdField.name;
+const emailField = config.emailField.name;
+const userNameField = config.userNameField.name;
+const webField = config.webField.name;
+
+const CONFIG = {
+  0:  "Name",
+  1:  "Instagram Handle",
+  2:  "User Name",
+  3:  "Focus",
+  4:  "Tiktok followers",
+  5:  "Instagram followers",
+  6:  "Calculation",
+  7:  "Search done?",
+  8:  "ID",
+  9:  "FollowersCount",
+ 10:  "FollowCount",
+ 11:  "MediaCount",
+ 12:  "Biography",
+ 13:  "RecentMediaItems",
+ 21: "targetUsername",
+22: "Attachments",
+23: "idx",
+24: "caption",
+25: "comments_count",
+26: "timestamp",
+27: "hashtags",
+28: "media_type",
+29: "hashtags_array",
+30: "recordId",
+
+};
+
+//get cell value by id function
+async function getCellValueById(recordId, fieldName,tableName) {
+  try {
+      const allFields = base.getTable(tableName).fields.map(f=>f.name)
+    const records = await base.getTable(tableName).selectRecordsAsync({fields:allFields})
+for(let rec of records.records){
+    if(rec.id === recordId){
+        return rec.getCellValue(fieldName)
+    } else {
+      //console.log('Record not found.');
+      return null;
+    }
+}
+  } catch (error) {
+    console.error('Error fetching record:', error);
+    return null;
+  }
+}
+
+// Ask the user to import a CSV file containing a header row
+let csvFileResult = await input.fileAsync(
+    'Upload a CSV file to update UserNames with new user names',
+    {allowedFileTypes: ['.csv'], hasHeaderRow: true}
+);
+
+// The file importer will automatically parse contents for many file types, including CSV files
+let csvRows = csvFileResult.parsedContents
+console.log("csvRows",csvRows)
+
+//fields for UserName table. Used later for finding any empty fields
+//let userNamesFields = ["Name","TikTok Handle","Instagram Handle","TT FollowersCount","Biography","TikTok ID","Email","User Name"]
+let userNamesFields = [nameField,ttHandleField,igHandleField,ttFollowersField,bioField,ttIdField,emailField,userNameField,webField]
+
+// Edit this to the name of a table in your base
+let table = base.getTable(usersTable)
+let existingRecords = await table.selectRecordsAsync({fields:userNamesFields})
+
+//lookup to hold current record Ids
+let lookupCurrentRecs = {}
+//gather current records Ids
+for(let rec of existingRecords.records){
+    let recValue = rec.getCellValue(igHandleField)
+    let ttValue = rec.getCellValue(ttHandleField)
+
+    if(recValue && recValue[0]!="@"){
+        recValue = `@${recValue}`
+        //console.log(recValue)
+    }
+    lookupCurrentRecs[recValue] = {id:rec.id}
+    if(ttValue!=null){
+        lookupCurrentRecs[ttValue] = {id: rec.id}
+    }
+//identify which fields need value
+    for(let f of userNamesFields){
+       
+        if(rec.getCellValueAsString(f)===null || !rec.getCellValueAsString(f) || rec.getCellValueAsString(f)===null){
+            
+            lookupCurrentRecs[recValue][f] = "N/A"
+
+            //console.log("lookupCurrentRecs[recValue]",lookupCurrentRecs[recValue])
+
+        }
+    }
+    
+}
+
+//console.log(csvRows)
+
+//extract tags from text
+function extractTag(tag){
+    if(tag!=undefined){
+    return tag.replaceAll(/\W+/g,"").trim()
+    }
+}
+//extract hashtags
+function extractTag(tag){
+    if(tag!=undefined){
+    let tagArray = tag.split("#");
+    let tempSet = new Set;
+    for(let i=1; i<tagArray.length; i++){
+        if(!tagArray[i].match(/fyp.*/)){
+        tempSet.add(tagArray[i].trim())}
+    }
+    return [... tempSet];
+    //return tag.replaceAll(/\W+/g,"").trim()
+    }
+}
+//extract IG handle
+function extractIG(text){
+    if(text!=undefined){
+
+    let match1 = text.match(/\w+\son\s[Ii][Gg]/)
+    let match2 = text.match(/[Ii][Gg][\W\s\d\w]*/)
+    let match3 = text.match(/@[\W\s\d\w]*/)
+    
+    let matchArray = [match1,match2,match3]
+
+    for(let m of matchArray){
+        if(m && m[0].length <41){
+            let newText = m[0]
+            if(newText.match(/\w+\s[Oo][Nn]\s[Ii][Gg]/)){
+            newText = newText.replace(/[Oo][Nn]\s[Ii][Gg]/,"");
+
+            }else if(newText.match(/[Ii][Gg][\W\s\d\w]*/)){
+            newText = newText.replace(/[Ii][Gg]/,"")
+            }
+            if(match3){
+              return `${newText.trim()}`  
+            }
+
+            return `@${newText.trim()}`
+        }
+    }
+}
+    return ""
+}
+
+//extract email
+function extractEmail(text){
+    if(text){
+        let match  =text.match(/^([a-z0-9_\.\-]+)@([\da-z\.\-]+)\.([a-z]{2,6})$/)
+        if(match){
+        return match[0]
+        }
+        else {return ""}
+    }
+    else {return ""}
+}
+//extract website
+function extractWeb(text){
+    if(text){
+    let match = /^(https?:\/\/)?(www\.)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[a-zA-Z0-9-._~:\?#\[\]@!$&'()*+,;=%]*)?$/
+    if(match){
+        return match[0]
+        }
+        else {return ""}
+    }
+}
+
+//create lookups from csv rows
+let lookupRows = {}
+let lookupCreateRows = {}
+
+for (let row of csvRows){
+    let name = row["authorMeta/name"] || row["authorMeta.name"]
+    let tag = `@${name}`
+    let hashtags = []
+
+for(let [key,value] of Object.entries(row)){
+//find if rows have fields named hashtags
+    if(key.match(/hashtags\/\dname/)){
+        console.log(value)
+        hashtags.push(value)
+    }
+}
+let newValue = [{diggCount: row.diggCount,
+                                        shareCount: row.shareCount,
+                                        playCount: row.playCount,
+                                        commentCount: row.commentCount,
+                                        hashtags: extractTag(row.text) || hashtags,
+                                        ig: extractIG(row["authorMeta/signature"]) || extractIG(row.text), 
+                                        text: row.text,
+                                        timestamp: JSON.stringify(row.createTimeISO)
+                                        }]
+//if user handle doesn't already exist in the lookuprows
+if(!lookupRows[tag]){
+    lookupRows[tag] = newValue
+
+
+
+}else{
+//if it does
+    lookupRows[tag] = [... lookupRows[tag], newValue]
+
+}
+
+if(!lookupCreateRows[tag]){
+    let recId = "" 
+    if(lookupCurrentRecs[tag]!=undefined && lookupCurrentRecs[tag].id){
+        recId = lookupCurrentRecs[tag].id
+    }
+    lookupCreateRows[tag] = {
+        "Name": row["authorMeta/nickName"],
+        "User Name": row["authorMeta/nickName"],
+        "TT FollowersCount": row["authorMeta/fans"],
+        "Biography": row["authorMeta/signature"],
+       "TikTok ID": row.id,
+        "Instagram": extractIG(row["authorMeta/signature"]) || extractIG(row.text),
+        "recId": recId,
+        "Email": extractEmail(row["authorMeta/signature"]) || "",
+        "Web": extractWeb(row["authorMeta/signature"]) || ""
+    }
+   
+
+}
+}
+console.log("lookupRows",lookupRows)
+console.log("lookupCreateRows", lookupCreateRows)
+console.log("lookupCurrentRecs", lookupCurrentRecs)
+
+//create the arrays for batch update records and batch create
+let toCreateUsers = []
+let toUpdateUsers = []
+let toCreatePosts = []
+
+// going over all the lookupRecords names and if the handle doesn't already exist - create new user
+for(let tag of Object.keys(lookupRows)){
+    //console.log(name)
+    //if current tag already exists in UserNames
+    if(lookupCurrentRecs[tag] && lookupCurrentRecs[tag]["id"]){
+        //get record Id
+        let record = lookupCurrentRecs[tag]["id"]
+        //check if there are values for any of these fields
+      for(let field of userNamesFields){
+         // console.log(tag, field,lookupCurrentRecs[tag][field],lookupCreateRows[tag][field])
+     {   //if no value
+         if(lookupCurrentRecs[tag][field]==="N/A" && lookupCreateRows[tag][field]!=null){
+
+         toUpdateUsers.push({id: record,fields: {
+             [field]:lookupCreateRows[tag][field],
+         }
+         })
+     }
+}
+}
+}else{
+        toCreateUsers.push({
+            fields:{
+            [igHandleField]: lookupCreateRows[tag]["Instagram"] || extractIG(lookupCreateRows[tag]["Biography"]) || null,
+            [ttHandleField]: tag,
+            [nameField]: lookupCreateRows[tag]["Name"],
+            [userNameField]: lookupCreateRows[tag]["User Name"],
+            [ttFollowersField]: lookupCreateRows[tag]["TT FollowersCount"],
+            [bioField]: lookupCreateRows[tag]["Biography"],
+            [ttIdField]: lookupCreateRows[tag]["TikTok ID"],
+            [webField]: lookupCreateRows[tag]["Web"] || extractWeb(lookupCreateRows[tag]["Biography"]),
+            [emailField]:lookupCreateRows[tag]["Email"] || extractEmail(lookupCreateRows[tag]["Biography"])
+            }
+        })
+    }
+}
+
+//identify media posts to create
+
+
+//gather current records from MediaPosts
+let mediaTable = base.getTable("MediaPosts")
+let mediaRecords = await mediaTable.selectRecordsAsync({fields:["caption"]})
+let onlyPosts = mediaRecords.records.map(f=>f.getCellValue("caption"))
+
+//go over all csv rows lookup, and if no text match in existing media posts then add to createposts array
+
+
+console.log("users to create", toCreateUsers.length, toCreateUsers)
+console.log("users to update", toUpdateUsers.length, toUpdateUsers)
+
+
+
+//going over all the text of the media posts and if the text doesn't exist - create new post
+
+// creating an dupdating user names
+
+console.log("Creating users")
+while (toCreateUsers.length > 0) {
+        await table.createRecordsAsync(toCreateUsers.slice(0, 50));
+        toCreateUsers = toCreateUsers.slice(50);
+    }
+
+console.log("Updateing users")
+
+while (toUpdateUsers.length > 0) {
+        await table.updateRecordsAsync(toUpdateUsers.slice(0, 50));
+        toUpdateUsers = toUpdateUsers.slice(50);
+    }
+
+// pull user names again to get their rec id for the media posts
+
+existingRecords = await table.selectRecordsAsync({fields:["Instagram Handle","TikTok Handle"]})
+let addedrecords = 0;
+for(let rec of existingRecords.records){
+    let recValue = rec.getCellValue("Instagram Handle") || rec.getCellValue("TikTok Handle")
+    if(recValue!=null && recValue[0]!="@"){
+        recValue = `@${recValue}`
+       // console.log(recValue)
+    }
+    if(!lookupCurrentRecs[recValue]){
+    lookupCurrentRecs[recValue] = {id: rec.id}
+    addedrecords++
+    }
+}
+
+console.log("New records added to existing records: ",addedrecords)
+
+for(let [name,values] of Object.entries(lookupRows))
+{
+    for(let value of values){
+        //console.log(value)
+    if(value.text && !mediaRecords.records.map(f=>f.getCellValue("caption")).includes(value.text)){
+    //console.log(value)
+    let recId  = []
+    if(lookupCurrentRecs[name] && (lookupCurrentRecs[name]["id"] || lookupCurrentRecs[name].id)){
+       recId.push({id: lookupCurrentRecs[name].id})
+    }
+    toCreatePosts.push(
+    {fields: {
+      "UserName record": recId,
+      "Name": lookupCreateRows[name]["Name"] || null,
+    "caption": value.text || null,
+      "comments_count": value.commentCount,
+      "timestamp": value.timestamp,
+      "hashtags": JSON.stringify(value.hashtags),
+      "media_type": "VIDEO_TIKTOK",
+      "recordId": lookupCurrentRecs[name].id,
+      "TikTok ID": lookupCreateRows[name]["TikTok ID"]
+    }
+  });
+}
+    }
+}
+
+console.log("posts to create:", toCreatePosts.length,toCreatePosts)
+//create media posts
+
+while (toCreatePosts.length > 0) {
+        await mediaTable.createRecordsAsync(toCreatePosts.slice(0, 50));
+        toCreatePosts = toCreatePosts.slice(50);
+    }
+
+
+console.log("Job's done")
