@@ -1,0 +1,457 @@
+//*** Pull data on Instagram Handles using the Instagram API ***/
+//copy this scripts to a Script extension in Airtable
+//The scripts take a list of instagram handles from a table and pulls their user info and latest posts
+//
+//Before you run the script ensure you have: Meta dev account, Instagram dev app, a business user connected to that app, OAuth for that user, and their ID. 
+//Check Meta documentation for more info on how to set it up: 
+//Register - App Development with Meta: https://developers.facebook.com/docs/development/register/
+//Create a Facebook Page for your business: https://www.facebook.com/business/help/473994396650734?id=939256796236247
+//Instagram Business account: https://help.instagram.com/502981923235522
+//Link accounts & Grant permissions: https://www.facebook.com/business/help/620548115562686?id=916550222172854
+//
+const config = input.config({
+    title: 'Update UserNames and Pull Media using Instagram API',
+    description: 'Pulls data on user handles using Instagrams API and then creates enteries in MediaPosts and update UserNames.',
+    items: [
+      input.config.select('dupesCheck',{label:'Dupes Check',
+      description:'Choose ON if you want to skip duplicate username. Choose OFF for debugging',
+      options: [{label: 'ON', value:'on'},
+      {label: 'OFF', value:'off'},]
+      }),
+      input.config.table('userNames', {
+            label: 'Table: User Names',
+            description: 'Table in which you keep the Instagram handles and user data',
+        }),
+      input.config.view('sortView', {
+            label:'View (User Names table)',
+            parentTable:'userNames',
+            description: 'Records at the top of the sorted view will run first (API fetch times out after x number of calls)',
+        }),
+      input.config.field('instagram_handle', {
+            label:'Instagram Handle field (User Names table)',
+            parentTable:'userNames',
+            description: 'The field of the Instagram handle to be used to fetch Instagram info',
+        }),
+      input.config.field('tiktok_handle', {
+            label:'Tiktok Handle field (User Names table)',
+            parentTable:'userNames',
+            description: 'The field of the Tiktok handle to be used to fetch Instagram info if no Instagram handle (if no field, chose the Instagram handle field)',
+        }),
+      input.config.field('username', {
+            label:'Name field (User Names table)',
+            parentTable:'userNames',
+        }),
+      input.config.field('instagram_followers', {
+            label:'Instagram followers field (User Names table)',
+            parentTable:'userNames',
+        }),
+      input.config.table('mediaPosts', {
+            label: 'Table: Media Posts',
+            description: 'Table to updaed with the individual posts',
+        }),
+      input.config.table('oAuth', {
+            label: 'Table: OAuth',
+            description: 'Table in which you keep the instagram acess token and business account number. You can find more info here: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/get-started/',
+        })
+    ]
+});
+
+const userNamesTableName = config.userNames.name
+const mediaPoststableName = config.mediaPosts.name
+const oAuthTableName = config.oAuth.name
+const view = config.sortView.name
+const instagram_handle = config.instagram_handle.name
+const tiktok_handle = config.tiktok_handle.name
+const username = config.username.name
+const instagram_followers = config.instagram_followers.name
+//expected field names. Update if your fields do not match 
+const CONFIG = {
+  name:  "Name",
+  instagram_handle:  instagram_handle,
+  tiktok_handle: tiktok_handle,
+  username: username,
+  focus:  "Focus",
+  tiktok_followers:  "Tiktok followers",
+  instagram_followers:  instagram_followers,
+id:  "ID",
+followers_count:  "FollowersCount",
+follows_count:  "FollowCount",
+media_count:  "MediaCount",
+biography:  "Biography",
+recentMediaItems:  "RecentMediaItems",
+targetUsername: "targetUsername",
+attachments: "Attachments",
+idx: "idx",
+caption: "caption",
+comments_count: "comments_count",
+timestamp: "timestamp",
+hashtags: "hashtags",
+media_type: "media_type",
+recordId: "recordId",
+website:"website",
+text:"caption",
+username_rec: "UserName record"
+
+};
+const dupesCheck = config.dupesCheck;
+
+//extract email function
+function extractEmail(text){
+    if(text){
+        let match  =text.match(/^([a-z0-9_\.\-]+)@([\da-z\.\-]+)\.([a-z]{2,6})$/)
+        if(match){
+        return match[0]
+        }
+        else {return ""}
+    }
+    else {return ""}
+}
+// Once the settings have been populated in the "Run script" pane, the returned config object
+// will contain the actual models for each item.
+
+
+
+//verify fields
+let updatesExpectedFields = ["name","id","username","instagram_handle","follows_count","biography","media_count","website"];
+let createsExpectedFields = ["targetUsername", "attachments", "idx", "caption", "comments_count","timestamp", "hashtags","media_type","recordId","website"];
+let tableMedia = base.getTable(mediaPoststableName);
+let fieldNames = tableMedia.fields.map(f => f.name);
+
+for (let i of createsExpectedFields) {
+  let fieldName = CONFIG[i];
+  if (!fieldNames.includes(fieldName)) {
+    await tableMedia.createFieldAsync(fieldName, "multilineText");
+    console.log(`✅ Created field: ${fieldName}`);
+  }
+}
+
+
+let updatesFields = base.getTable(userNamesTableName).fields.map(f=>f.name.toString());
+let missingFields = []
+//console.log(updatesFields)
+console.log("Missing fields",findField(updatesFields, updatesExpectedFields))
+
+let createsFields = base.getTable(mediaPoststableName).fields.map(f=>f.name.toString());
+//console.log(createsFields)
+console.log("Missing fields",findField(createsFields, createsExpectedFields));
+
+
+//function check fields from config in an array of field names
+function findField(array, configArray) {
+  const missingFields = [];
+  if (Array.isArray(array) && Array.isArray(configArray)) {
+    for (let i of configArray) {
+      const fieldNameTemp = CONFIG[i].toString();
+      if (!array.includes(fieldNameTemp)) {
+        console.log(`${fieldNameTemp} missing from fields array`)
+        missingFields.push(fieldNameTemp);
+      }
+    }
+  }
+  return missingFields;
+}
+
+//function: get hashtags
+function getHashtags(text){
+  if (typeof text !== "string") {
+    return [];
+  }
+  let results = text.split("#");
+  results.splice(0, 1);
+  return results;
+}
+// progress bar functions 
+function progressBar(done, total) {
+  const filled = Math.floor(((total - done.length) / total) * 10);
+  const empty = 10 - filled;
+  const bar = "✅".repeat(filled) + "⬜️".repeat(empty);
+  output.text(bar);
+}
+
+function progressBarSimple(done,total){
+
+  const filled = Math.floor(((total - done.length) / total) * 10);
+  const empty = 10 - filled;
+  if(filled%25===0){
+  const bar = "✅".repeat(filled) + "⬜️".repeat(empty);
+  return bar;}
+}
+
+// prepare look-ups
+let results = [];
+let lookupData = {};
+let lookupMedia = {};
+let lookupRecordId = {};
+
+//get OAuth data from OAuth table
+const oAuthTable = base.getTable(oAuthTableName)
+console.log(oAuthTable.fields)
+
+const oAuthData = await oAuthTable.selectRecordsAsync({fields:["igBusinessAccountId","access_token"]})
+let igBusinessAccountId = "";
+let accessToken = "";
+for(let data of oAuthData.records){
+  if(data.getCellValue("access_token") && data.getCellValue("igBusinessAccountId")){
+    accessToken  = data.getCellValue("access_token");
+    igBusinessAccountId = data.getCellValue("igBusinessAccountId")
+    break;
+  }
+}
+
+if(accessToken===null || igBusinessAccountId===null){
+  console.error("Missing OAuth credentials. Please updaet tabel: OAuth, Fields: access_token, igBusinessAccountId");
+  return;
+}
+
+// your accessToken
+
+// get table + records
+const table = base.getTable(userNamesTableName);
+const sourceFields = table.fields.map(f => f.name);
+const sourceRecords = await table.getView(view).selectRecordsAsync({ fields: sourceFields });
+
+// build lookup id map
+console.log("Building lookupRecordId id map.")
+
+for (let rec of sourceRecords.records) {
+  lookupRecordId[rec.id] = {};
+  
+  let igHandle
+  if(Array.isArray(rec.getCellValue(CONFIG["instagram_handle"]))){
+    igHandle = rec.getCellValue(CONFIG["instagram_handle"]).split(", ")
+    }else{
+      igHandle= rec.getCellValue(CONFIG["instagram_handle"]) || rec.getCellValue(CONFIG["tiktok_handle"])}
+
+if(igHandle===null){
+  continue;
+}
+  lookupRecordId[rec.id][CONFIG["instagram_handle"]] = igHandle
+  for (let f of updatesExpectedFields) {
+    if(f==="tiktok_handle" || f==="instagram_handle"){
+      continue;
+    }
+    const cellValue = rec.getCellValue(CONFIG[f]);
+    if ((cellValue === null || cellValue === undefined)) {
+      lookupRecordId[rec.id][f] = "N/A";
+    }
+  }
+}
+
+//console.log(lookupRecordId);
+// Remove duplicates: track which Instagram handle usernames we’ve processed
+const seenHandles = new Set();
+
+// Collect updates and creates
+let updates = [];
+let creates = [];  // if you have any “new record” logic you want to create
+let done = 0;
+console.log(`Running the Instagram API for ${Object.keys(lookupRecordId).length} records`)
+
+//lookup to stroe fetched API values
+console.log(lookupRecordId)
+let lookupFetched = {}
+let invalidUsers = [] //for debugging
+let skippedUsers = []//for debugging
+//-------------------------
+//start of the "for" loop
+//------------------------
+
+for (let [recId, fieldsMap] of Object.entries(lookupRecordId)) {
+
+
+//skipping records with fields
+
+//fieldsMap = values
+  const fieldName = CONFIG["instagram_handle"];  // “Instagram Handle”
+
+ // console.log("Instagram Handle",fieldName,fieldsMap)
+  if(fieldsMap)
+  if (!(fieldName in fieldsMap)) {
+    console.warn(`⚠️ Field "${fieldName}" missing in record ${recId}. Skipping.`);
+    continue;
+  }
+
+  let rawHandle = fieldsMap[fieldName];
+
+  if(Array.isArray(rawHandle.split(", "))){
+
+  for(let n of rawHandle.split(", ")){
+    rawHandle = n;
+  
+
+  
+
+  if (typeof rawHandle !== "string") {
+    console.warn(`⚠️ Field "${fieldName}" for record ${recId} is not a string:`, rawHandle);
+    continue;
+  }
+
+const targetUsername = rawHandle.replace("@", "").trim().toLowerCase();
+
+  if (!targetUsername) {
+    console.warn(`⚠️ username empty after cleanup for record ${recId}. Skipping.`);
+    continue;
+  }
+
+if(dupesCheck ==="on"){
+  if (seenHandles.has(targetUsername)) {
+    console.log(`🔁 Duplicate handle "${targetUsername}" found. Skipping record ${recId}.`);
+    continue;
+  }
+}
+  seenHandles.add(targetUsername);
+
+  //console.log(`${seenHandles.size}/${Object.keys(lookupRecordId).length}: ${targetUsername}`)
+
+  // build API URL
+  const url =
+    `https://graph.facebook.com/v21.0/${igBusinessAccountId}` +
+    `?fields=business_discovery.username(${targetUsername})` +
+    `{id,username,name,biography,website,followers_count,follows_count,media_count,` +
+      `media{ id,caption,media_url,permalink,like_count,comments_count,media_type,timestamp }}` +
+    `&access_token=${accessToken}`;
+
+ 
+  let response, data;
+  try {
+  console.log(`${seenHandles.size}/${Object.keys(lookupRecordId).length}: Fetching for ${targetUsername}`)
+
+    response = await fetch(url);
+    data = await response.json();
+
+    if(Object.keys(data)[0]==="error" && data["error"]["message"]==="Invalid user"){
+      console.warn(`🤷‍♀️ ${data["error"]["error_user_title"]}: ${data["error"]["error_user_msg"]} 
+      Record: ${recId}`);
+      invalidUsers.push(targetUsername)
+    continue;
+      }else if(Object.keys(data)[0]==="error" && data["error"]["message"]==="(#4) Application request limit reached"){
+        console.error(`❌ OAuthException exception ${data["error"]["message"]} (record ${recId}):
+      Note: Wait before running again to dismiss the error.`);
+      skippedUsers.push(targetUsername)
+      break;
+
+      }else if(Object.keys(data)[0]==="error"){
+      console.warn(`🤷‍♀️ ${data["error"]["error_user_title"]}: ${data["error"]["error_user_msg"]} 
+      Record: ${recId}`);
+      invalidUsers.push(targetUsername)
+      continue;
+
+      }
+
+      }
+    
+  
+    catch (err) {
+
+    console.warn(`❌ Fetch error for username ${targetUsername} (record ${recId}):`, err);
+    continue;
+  }
+
+  const bd = data.business_discovery;
+  //console.log(bd)
+  
+
+  if (!bd) {
+    results.push(`⚠️ No business_discovery data for record ${recId}, username ${targetUsername}. Response: ${JSON.stringify(data)}`);
+    continue;
+  } else {
+    results.push(`✅ ${targetUsername}`);
+  }
+  //initialize the value
+lookupFetched[recId]
+
+//only update missing values
+for(let field of updatesExpectedFields){
+  if(lookupRecordId[field]==="N/A" && (bd[field] || field ==="email")){
+
+    if(field==="email" && bd.biography){
+
+      updates.push({
+    id: recId,
+    fields: {
+      [CONFIG[field]] : extractEmail(bd.biography)
+  }
+})
+    }else{
+
+    updates.push({
+    id: recId,
+    fields: {
+      [CONFIG[field]] : bd[field]
+
+  }
+})
+}
+  }
+}
+    
+  if (Array.isArray(bd.media?.data)) {
+    bd.media.data.forEach((item, idx) => {
+      lookupData[`${targetUsername}_${idx}`] = {
+        targetUsername: item.username,
+        idx: item.id,
+        caption:    item.caption,
+        comments_count: item.comments_count,
+        media_type: item.media_type,
+        timestamp:  item.timestamp,
+        recordId:   recId,
+        username:   fieldsMap[CONFIG["username"]],  // “User Name”
+        hashtags:   getHashtags(item.caption).sort((a,b)=>a-b),
+        
+      };
+ creates.push({
+    fields: {
+      "Name" : `${fieldsMap[CONFIG["name"]]}`, 
+      "id": Number.parseInt(bd.id) || 0,
+      "UserName record": [{id: recId}],
+      [CONFIG["targetUsername"]]: bd.targetUsername,
+      [CONFIG["caption"]]: item.caption,
+      [CONFIG["idx"]]: item.idx,
+      [CONFIG["comments_count"]]: item.comments_count,
+      [CONFIG["timestamp"]]: item.timestamp,
+      [CONFIG['caption']]: JSON.stringify(getHashtags(item.caption)),
+      [CONFIG["media_type"]]: item.media_type,
+      [CONFIG["hashtags"]]: JSON.stringify(getHashtags(item.caption).sort()),
+      [CONFIG["username_rec"]]: [{id:recId}],
+
+    }
+  });
+      
+    });
+  }
+
+}
+}}
+
+//showing which users will be updated
+console.log("To update: ",updates.length)
+console.log("To create: ",creates.length)
+console.log(creates)
+console.log(updates)
+
+let ogsize = updates.length
+
+while (updates.length > 0) {
+  const batch = updates.slice(0, 50);
+  await table.updateRecordsAsync(batch);
+  updates = updates.slice(50);
+  progressBar(updates, ogsize);
+  console.log(`Updated ${batch.length}, remaining: ${updates.length}`);
+}
+
+
+
+// Batch create (if needed) in chunks of <=50
+ogsize = creates.length;
+
+
+while (creates.length > 0) {
+  const batch = creates.slice(0, 50);
+  await tableMedia.createRecordsAsync(batch);
+  creates = creates.slice(50);
+  progressBar(creates, ogsize);
+  console.log(`Created ${batch.length}, remaining: ${creates.length}`);
+}
+console.log("Invalid usernames detected: ",invalidUsers)
+console.log("Skipped users due to timeout error: ",skippedUsers)
+output.text("Done!")
