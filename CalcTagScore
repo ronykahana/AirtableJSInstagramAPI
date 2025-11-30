@@ -1,0 +1,278 @@
+//Copy to an Airtbale Script extension 
+//Add Formula field to calculate scores, for example: 
+//IF(
+ // REGEX_MATCH({Score (String)},
+ // "[Vv]ery.[Ll]ow"),1.5,
+ // IF(REGEX_MATCH({Score (String)},
+  // "[Ll]ow"),2,
+  // IF(REGEX_MATCH({Score (String)},
+   // "[Mm]id"),3,
+   // IF(REGEX_MATCH({Score (String)},
+   // "[Hh]igh"),4,
+   // IF(REGEX_MATCH({Score (String)},
+   // "[Vv]ery.[Hh]igh"),5,
+   // 1)))))
+  
+//
+const config = input.config({
+    title: 'Calculate and create new Hashtag Score records from MediaPosts',
+    items: [
+        input.config.select('action',{
+            label: 'Choose an Action: Update or Create Records',
+            description:'Update records or create new records?',
+            options:[
+                {label:'Update', value:'update'},
+                {label:'Create',value:'create'}
+            ]
+        }),
+        input.config.table('mediaPosts', {
+            label: '- Media Posts Table -',
+            description: 'The table in which you keep the individual media posts'
+        }),
+        input.config.field('hashtagField', {
+            label: 'Hashtag field (string)',
+            parentTable: 'mediaPosts',
+            description:'from Media Posts Table. Expecting the content to be a stringify array.'
+        }),
+        input.config.table('scoreDic', {
+            label: '- Score Dictionary Table -',
+            description: 'The table in which you keep each keyword and its score'
+        }),
+        input.config.field('keywordFieldName_dic',{
+            label:'Keyword Family field (string)',
+            parentTable: 'scoreDic',
+        }),
+        input.config.field('scoreField_dic',{
+            label:'Score field (string)',
+            parentTable: 'scoreDic',
+        }),
+        input.config.table('scoreCalc', {
+            label: '- Score Calculation Table -',
+            description: 'The table linking between the hashtags (Media Posts) and their value (Score Dictionary)'
+        }),
+        input.config.field('keywardField',{
+            label:'Keyword field (string)',
+            parentTable: 'scoreCalc',
+        }),
+        input.config.field('mediaPostsField',{
+            label:'Link to records in the Media Posts table field',
+            parentTable: 'scoreCalc',
+            description:'"Link to another record" type field'
+        }),
+        input.config.field('keywardFamilyField',{
+            label:'Keyword Family field (string)',
+            parentTable: 'scoreCalc',
+        }),
+        input.config.field('scoreField',{
+            label:'Score field (string)',
+            parentTable: 'scoreCalc',
+        }),
+        
+    ]
+});
+const mediaPostsTable = config.mediaPosts.name;
+const hashtagField = config.hashtagField.name;
+const scoreCalcTable = config.scoreCalc.name;
+const keywordFieldName = config.keywardField.name;
+const mediaPostsField = config.mediaPostsField.name;
+const scoreDic = config.scoreDic.name;
+const scoreValueField = config.scoreField.name;
+const keywardFamilyField = config.keywardFamilyField.name;
+const scoreValueField_dic = config.scoreField_dic.name;
+const keywordFieldName_dic = config.keywordFieldName_dic.name; 
+
+const action = config.action;
+//mentalhealth
+//strategy 
+//
+function extractTag(tag){
+    return tag.replaceAll(/\W+/g,"").trim()
+}
+
+let lookupRec = {}
+
+// Airtable limits batch operations to 50 records or fewer.
+let maxRecordsPerCall = 50;
+// the deduper function 
+let comparisonField = base.getTable(scoreCalcTable).getField(keywordFieldName).name
+
+function choose(recordA, recordB) {
+    let valueA = recordA.getCellValueAsString(comparisonField);
+    let valueB = recordB.getCellValueAsString(comparisonField);
+    return valueA > valueB ? { keep: recordA, discard: recordB } : { keep: recordB, discard: recordA };
+}
+
+
+// Part 1: Identify duplicate records in need of deletion
+//
+// We don't modify the table contents in this Part in the interest of
+// efficiency. This script may trigger a large number of deletions, and it's
+// much faster to request that they be done in batches. When we identify a
+// record that should be deleted, we add it to an array so we can batch the
+// operations in Part 3 of the script.
+let query = await base.getTable(scoreCalcTable).selectRecordsAsync({
+    fields: [keywordFieldName, mediaPostsField],
+});
+let lookupRecId = {} // to store word rec id from score calc
+
+//get current records
+for (let record of query.records) {
+    let newT = record.getCellValue(keywordFieldName);
+    if(newT===null){
+        continue;
+    }
+    if(!lookupRec[newT]){
+            lookupRec[newT] = {}
+            if(record.getCellValue(mediaPostsField)!=null)
+           { lookupRec[newT]["id"]  = [record.getCellValue(mediaPostsField).map(f=>f.id)]
+        }else if(record.getCellValue(mediaPostsField)!=null){
+            lookupRec[newT]["id"] = [... lookupRec[newT]["id"], record?.getCellValue(mediaPostsField).map(f=>f.id)]
+        }
+}
+    if(!lookupRecId[newT]){
+        lookupRecId[newT] = record.id
+    }
+}
+
+// Part 2: Verify
+//
+// Inform the script's user of the changes to be made and await their
+// confirmation.
+
+
+//get tags from Media posts
+let getTags = await base.getTable(mediaPostsTable).selectRecordsAsync({fields:[hashtagField]})
+let tagSet = new Set
+
+for(let i of getTags.records){
+    if(i.getCellValue(hashtagField)!==null && i!==undefined){
+       // console.log(i.getCellValue(hashtagField))
+    let tags = i.getCellValue(hashtagField).replace(`"`,"").split(",") //.forEach(i=>i.replace(`"`,""))
+    for(let t of tags){
+        let newT  = extractTag(t)
+        if(newT!=null && newT.length<60) {tagSet.add(newT)
+        if(!lookupRec[newT]){
+            lookupRec[newT] = {}
+            lookupRec[newT]["id"]  = [i.id]
+        }else{
+            lookupRec[newT]["id"] = [... lookupRec[newT]["id"],i.id]
+        }
+        
+        } //to avoid getting sentences
+    }
+    }
+
+}
+
+console.log(lookupRec)
+
+let tagArray = [...tagSet].sort()
+console.log(tagArray)
+
+//get keywards and score from Score Dictionary table
+let keywords = await base.getTable(scoreDic).selectRecordsAsync({fields:[keywordFieldName_dic,scoreValueField_dic]})
+let wellnessKeywords = {}
+for(let i of keywords.records){
+    if(!wellnessKeywords[i.getCellValue(keywordFieldName_dic)]){
+        wellnessKeywords[i.getCellValue(keywordFieldName_dic)] = i.getCellValue(scoreValueField_dic)
+    }
+
+}
+//match keywords with their score
+console.log(wellnessKeywords)
+let noMatch = new Set
+for(let text of tagArray){
+    for(let [word,score] of Object.entries(wellnessKeywords)){
+        word = word.trim()
+    const regex = new RegExp(`\\w*(${word})\\\w*`, "i");
+    const match = text.match(regex);
+if (match) {
+   // console.log(word,text)
+    if(!lookupRec[text][keywardFamilyField]){
+        lookupRec[text][keywardFamilyField] = word
+        lookupRec[text][scoreValueField] = score  
+      //  console.log(lookupRec[text])   
+        
+}
+    }else{
+        noMatch.add(text)
+    }
+}
+}
+//output.table(lookupRec)
+let create = [];
+let update = [];
+for (let [word,details] of Object.entries(lookupRec)){
+    let tempSet = new Set
+    for(let i of details["id"]){
+        if(Array.isArray(i)){
+            for(let ii of i){
+                tempSet.add(ii.trim())
+            }
+        }else{
+        tempSet.add(i.trim())}
+    }
+    let tempSetArray = [... tempSet]
+    let idArray = []
+    for (let i of tempSetArray){
+        if(Array.isArray(i)){
+            for(let ii of i){
+
+                idArray.push({id:ii})
+
+            }
+        }else{
+       idArray.push({id:i})}
+    }
+if(!lookupRecId[word]){
+   // console.log(idArray)
+create.push(
+    {fields:{
+        [keywordFieldName]: word,
+        scoreValueField: details[keywardFamilyField],
+        [keywardFamilyField]:  details[keywardFamilyField],
+        [mediaPostsField]: idArray,
+
+    }
+    }
+)
+}else{
+    update.push(
+        {id: lookupRecId[word],
+            fields:{
+        [keywordFieldName]: word,
+        "Score (String)": details["Score"],
+        "WordFamily":  details["WordFamily"],
+        [mediaPostsField]: idArray,
+
+            }
+        }
+    )
+}
+}
+console.log(create)
+console.log(update)
+
+let tableKeywords = base.getTable(scoreCalcTable)
+
+if(action==='create'){
+    console.log(`Creating ${create.length} records`)
+
+while (create.length > 0) {
+  const batch = create.slice(0, 50);
+  await tableKeywords.createRecordsAsync(batch);
+  create = create.slice(50);
+  console.log(`Remaining: ${create.length}`);
+}
+}
+
+if(action==='update'){
+   console.log(`Updating ${update.length} records`)
+
+while (update.length > 0) {
+  const batch = update.slice(0, 50);
+  await tableKeywords.updateRecordsAsync(batch);
+  update = update.slice(50);
+  console.log(`Remaining: ${update.length}`);
+}
+}
