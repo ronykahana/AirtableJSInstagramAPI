@@ -1,0 +1,167 @@
+//copy paste this script to an Airtble script extension 
+//extracts webpage, Ig handle, email from a text field
+//no api needed
+
+const config = input.config({
+    title: 'Pull Contacts from Bio',
+    items: [
+        input.config.table('usersTable', {
+            label: '- User Names table -',
+            description: 'The table in which you keep the users, the bio field, and the fields to update'
+        }),
+        input.config.field('bioField', {
+            label: 'Biography field',
+            parentTable: 'usersTable',
+            description:'from User Names table. Expecting the content to be a string.'
+        }),
+        input.config.field('instaField', {
+            label: 'Instagram Handle destination field',
+            parentTable: 'usersTable',
+            description:'from User Names table. Will populate with instagram handle.'
+        }),
+        input.config.field('emailField', {
+            label: 'Email destination field',
+            parentTable: 'usersTable',
+            description:'from User Names table. Will populate with the email.'
+        }),
+        input.config.field('webField', {
+            label: 'Webpage destination field',
+            parentTable: 'usersTable',
+            description:'from User Names table. Will populate with webpage.'
+        }),
+        
+    ]
+});
+const usersTable= config.usersTable.name;
+const bioField = config.bioField.name;
+const instaField = config.instaField.name;
+const emailField = config.emailField.name;
+const webField = config.webField.name;
+
+let fieldsLookup = {
+    email: emailField,
+    web: webField,
+    ig: instaField
+}
+//functions to extract instagram , email , webpage
+function extractEmail(text){
+    let match  =text.match(/([a-zA-Z\d\w\S_\.\-]+)@([a-zA-Z0-9\s\.]+)\.([A-Za-z]{2,6})/gi)
+ return extract(text,match)
+}
+
+function returnArray(text){
+    return text.split(" ")
+}
+//
+function extractIG(text){
+    if(text!=undefined){
+    
+    let newArray = returnArray(text);
+    let matchSet = new Set
+
+    for(let text of newArray){
+    let match1 = text.match(/@{1}(\b[a-z0-9._-]{1,30})\b(?!\.[a-z]{2,}^\s\b)/g)
+    let match2 = text.match(/\.com/)
+     if(match1 && !match2){
+       matchSet.add(match1[0])
+       
+    }
+    }
+
+    return [... matchSet].join(", ")
+    }
+    return ""
+}
+
+//extract web
+function extractWeb(text){
+
+    let matchWeb = /^(https?:\/\/)?(www\.)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[a-zA-Z0-9-._~:\?#\[\]@!$&'()*+,;=%]*)?$/
+    return extract(text,matchWeb)
+}
+
+
+function extract(text, match){
+    if(text!=undefined){
+    let newArray = returnArray(text);
+    let matchSet = new Set
+
+    for(let text of newArray){
+
+    if(text.match(match)){
+        matchSet.add(text.match(match)[0])
+    }
+    }
+    return [... matchSet].join(", ")
+}else {
+    console.log("undefined")
+    return ""}
+}
+//function running all
+function test(text) { //to test all other functions
+console.log("Email", extractEmail(text))
+console.log("Web",extractWeb(text))
+console.log("IG",extractIG(text))
+}
+
+ 
+//Get all Bio fields from User Names table
+
+let userRecords = await base.getTable(usersTable).selectRecordsAsync({fields:[bioField,instaField,emailField,webField]})
+
+//lookup for records to make it easy to update later
+
+let recordsLookup = {}
+
+//go over all records - if bio field has content extract
+
+for(let rec of userRecords.records){
+    if(rec.getCellValue(bioField)!=null){
+
+        let bio = rec.getCellValue(bioField)
+
+        let email, web, ig
+        if(extractEmail(bio)!=null){email = extractEmail(bio)
+        
+        if(extractIG(bio)!=null){ig = extractIG(bio)
+  
+        }
+        if(extractWeb!=null){web = extractWeb(bio)
+        }
+        }
+         //console.log(email,ig,web)
+        if(!(email==="" && ig==="" && web===undefined)){
+           
+         recordsLookup[rec.id] = {bio: bio, 
+                                email: email || null, 
+                                ig: ig || null, 
+                                web: web || null}
+
+        }
+        
+
+    }
+}
+//console.log(recordsLookup) // verify all looks good
+
+//create the records to update
+let updates = []
+for(let [key,value] of Object.entries(recordsLookup)){
+for(let [k,v] of Object.entries(value)){
+    if(k!="bio" && v!=null){
+        updates.push({id:key, fields:{
+            [fieldsLookup[k]]: v
+        }})
+    }
+}
+}
+
+//update records
+console.log(`Updaing ${updates.length} records`)
+output.table(updates)
+while (updates.length > 0) {
+        await base.getTable(usersTable).updateRecordsAsync(updates.slice(0, 50));
+        updates = updates.slice(50);
+    }
+
+console.log("Done")
