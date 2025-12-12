@@ -1,0 +1,146 @@
+const config = input.config({
+    title: 'Run Whatsapp API Actions',
+   description: 'Set up your Whatsapp business app and phone number before you start. \n\n**Initial app setup**\n\n1. Register as a developer: https://developers.facebook.com/apps/ \n2. Create new app with Whatsapp component: https://developers.facebook.com/documentation/business-messaging/whatsapp/get-started \n3. Connect a phone number* to your app: https://www.facebook.com/business/help/456220311516626?id=2129163877102343 \n**The phone number cannot be already connected to Whatsapp.* \n\n**Setting up private and public keys**\n\n1. Install Node.js: https://nodejs.org \n2. Install Vercel CLI by opening and running: **npm i -g vercel** \n3. Then log in by running (in terminal): **vercel login** \n4. Follow login instructions to create an account \n5. Create this folder structure anywhere on your machine: **whatsapp-backend/api** \n6. In the terminal, navigate to the api folder (replace full path with actual path): **cd (full path)/whatsapp-backend/api** \n7. Deploy by running: **vercel** \n8. Generate the key pair by running: **openssl genrsa -out private_key.pem 2048** \n9. And then: **openssl rsa -in private_key.pem -pubout -out public_key.pem** \n 10. Your public key is the content of **public_key.pem** \n\n**Getting all the needed info:** \n1. Phone number Id: https://business.facebook.com/latest/settings/whatsapp_account ->Account tools ->Phone numbers\n2. Phone number certificate: https://business.facebook.com/latest/whatsapp_manager/\n3. Whatsapp Business phone number Id: https://business.facebook.com/latest/settings/whatsapp_account ->WhatsApp accounts \n4. API version: https://developers.facebook.com/tools/explorer \n5. Generate access token: https://developers.facebook.com/tools/explorer -> Select user and all Whatsapp options ->Generate\n6. Extend the duration of the token from 1h: https://developers.facebook.com/tools/debug/accesstoken ->Scroll down ->Extend \n*** \n**Enter the info and choose an action to run**'
+    ,items: [
+        input.config.text('phone_num', {
+            label: 'Phone number',
+            description:'Ex.: 000-000-0000'
+        }),
+        input.config.text('phone_id', {
+            label: 'Phone number id',
+            description:'From: https://business.facebook.com/latest/settings/whatsapp_account ->Phone numbers'
+        }),
+        input.config.text('num_cert',{
+          label:'Phone number certificate'
+        }),
+        input.config.text('whatsapp_business_phone_number_ID',{
+          label:'Whatsapp Business phone number Id',
+          description:'From: https://business.facebook.com/latest/settings/whatsapp_account ->WhatsApp accounts'
+        }),
+
+        input.config.number('pin', {
+            label: 'Choose a 6 digit pin',
+            description:'Needed to register the number and used for identification'
+        }),
+
+        input.config.text('api_v', {
+            label: 'API version',
+            description: 'Ex.: v24.0'
+        }),
+        input.config.text('access_token',{
+          label:'Access token'
+        }),
+        input.config.text('app_id', {
+          label: 'App Id'
+        }),
+        input.config.text('public_key',{
+          label:'Public key (from public_key.pem)',
+          description:'Including "-----BEGIN PUBLIC KEY-----" and "-----END PUBLIC KEY-----"'
+        }),
+        input.config.select('action', {
+            label: 'Action to run',
+            options: [
+                {label: 'Get all phone numbers', value: 'get_all_p_numbers'},
+                {label: 'Register a phone number', value: 'register_p_number'},
+                {label: 'Set public key', value: 'set_key'},
+                {label: 'Messages', value: 'msgs'},
+
+            ]
+        })
+    ]
+});
+
+// Once the settings have been populated in the "Run script" pane, the returned config object
+// will contain the actual models for each item.
+
+let phone_num = config.phone_num
+let phone_id = config.phone_id
+let api_v = config.api_v
+let app_id = config.app_id
+let access_token = config.access_token
+let num_cert = config.num_cert
+let whatsapp_business_phone_number_ID = config.whatsapp_business_phone_number_ID
+let action = config.action
+let public_key = config.public_key
+let pin = config.pin
+
+let headers = {
+  "Authorization": `Bearer ${access_token}`,
+  "Content-Type": "application/json",
+};
+let params = {
+  messaging_product: "whatsapp",
+  pin: `${pin}`,
+
+}
+
+
+let url = `https://graph.facebook.com/${api_v}`
+let body
+
+//Get All Phone Numbers
+if(action==="get_all_p_numbers"){
+let get_ = "debug_token?input_token=`${access_token}`
+url = `https://graph.facebook.com/${api_v}/${whatsapp_business_phone_number_ID}/phone_numbers?access_token=${access_token}`
+}
+
+//register number
+if(action==="register_p_number"){
+url =`https://graph.facebook.com/${api_v}/${phone_id}/register`
+body = {
+  messaging_product: "whatsapp",
+  pin: `${pin}`
+}
+}
+//get messeges
+if(action==="msgs"){
+url = `https://graph.facebook.com/${api_v}/${phone_id}/messages`;
+
+body = {
+  messaging_product: "whatsapp",
+  to: `${phone_num}`,
+  type: "template",
+  template: {
+    name: "hello_world",
+    language: { code: "en_US" },
+  },
+};
+}
+
+//Set Business Public Key
+if (action === 'set_key') {
+  const url = `https://graph.facebook.com/${api_v}/${phone_id}/whatsapp_business_encryption`;
+
+  const headers = {
+    "Authorization": `Bearer ${access_token}`,
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+
+  // URL-encode the form body
+  const params = new URLSearchParams();
+  params.append("business_public_key", public_key);
+
+  console.log("REQUEST BODY:", params.toString());
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: params.toString(),
+  });
+
+  const data = await response.json();
+  console.log("RESPONSE:", data);
+
+}else{
+
+
+console.log(body)
+const response = await fetch(url, {
+  method: "POST",
+  headers,
+  body: JSON.stringify(body),
+});
+const data = await response.json();
+console.log(data);
+
+
